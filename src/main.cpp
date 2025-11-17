@@ -11,21 +11,21 @@
 
 int main(void)
 {  
-    // parseMap();
+    // Parse map and provide geometry to renderer
     // aStar();
-    
+
     Renderer renderer;
-    renderer.setVertices({
-        0.5f, 0.5f, 0.0f, // top right
-        0.5f, -0.5f, 0.0f, // bottom right
-        -0.5f, 0.5f, 0.0f, // top left
-        -0.5f, -0.5f, 0.0f, // bottom left
-    });
-    renderer.setIndices({
-        0, 1, 2,
-        1, 2, 3
-    });
-   
+
+    Map map = parseMap("res/data/karachi.osm.pbf");
+    
+    if (!map.vertices.empty() && !map.indices.empty()) {
+        renderer.setVertices(map.vertices);
+        renderer.setIndices(map.indices);
+
+        // provide per-segment info so Renderer can draw continuous strips
+        renderer.setSegmentInfo(map.segmentOffsets, map.segmentLengths);
+        renderer.setDrawMode(GL_LINE_STRIP);
+    }
 
     Windower windower(renderer, 800, 640);
     windower.run();

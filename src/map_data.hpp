@@ -15,6 +15,13 @@
 #include <iomanip>
 #include <sstream>
 
-void parseMap();
+struct Map {
+	std::vector<float> vertices;
+	std::vector<unsigned int> indices;
+	std::vector<size_t> segmentOffsets;
+	std::vector<size_t> segmentLengths;
+};
+
+Map parseMap(const std::string& filepath);
 
 #endif

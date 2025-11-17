@@ -1,3 +1,5 @@
+#include "map_data.hpp"
+
 // Map_Data.cpp (modified to include node lat/lon output)
 
 #include <iostream>
@@ -14,6 +16,9 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <limits>
+#include <cmath>
+#include <algorithm>
 
 struct Road {
     std::string name;
@@ -113,8 +118,9 @@ public:
     }
 };
 
-void parseMap() {
+Map parseMap(const std::string& filepath) {
     const std::string input_file = "res/data/karachi.osm.pbf";
+    Map out;
 
     try {
         osmium::io::Reader reader(input_file);
@@ -123,27 +129,152 @@ void parseMap() {
         osmium::apply(reader, handler);
         reader.close();
 
-        // Generate txt file
-        auto now = std::chrono::system_clock::now();
-        std::time_t t = std::chrono::system_clock::to_time_t(now);
-        std::stringstream filename;
-        filename << "res/data/output_"
-                 << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S")
-                 << ".txt";
-
-        std::ofstream outfile(filename.str());
-        if (!outfile) {
-            std::cerr << "Failed to create output file.\n";
-            return;
+        if (handler.node_coords.empty()) {
+            std::cerr << "No node coordinates parsed from map file.\n";
+            return out;
         }
 
-        handler.printMergedData(outfile);
-        outfile.close();
+        // Compute bounding box
+        double minLat = std::numeric_limits<double>::max();
+        double maxLat = std::numeric_limits<double>::lowest();
+        double minLon = std::numeric_limits<double>::max();
+        double maxLon = std::numeric_limits<double>::lowest();
 
-        std::cout << "Map data successfully written to: " << filename.str() << "\n";
-        std::cout << "Map data successfully merged and displayed.\n";
+        for (const auto& kv : handler.node_coords) {
+            double lat = kv.second.first;
+            double lon = kv.second.second;
+            minLat = std::min(minLat, lat);
+            maxLat = std::max(maxLat, lat);
+            minLon = std::min(minLon, lon);
+            maxLon = std::max(maxLon, lon);
+        }
+
+        double latRange = (maxLat - minLat);
+        double lonRange = (maxLon - minLon);
+        if (latRange == 0) latRange = 1.0;
+        if (lonRange == 0) lonRange = 1.0;
+
+        // Map node id -> vertex index
+        std::unordered_map<osmium::object_id_type, unsigned int> node_index;
+
+        // Build vertices and indices (line segments)
+        for (const auto& entry : handler.mergedRoads) {
+            const auto& road = entry.second;
+            for (const auto& seg : road.segments) {
+                if (seg.size() < 2) continue;
+
+                for (size_t i = 0; i < seg.size(); ++i) {
+                    osmium::object_id_type nid = seg[i];
+                    auto it = node_index.find(nid);
+                    if (it == node_index.end()) {
+                        auto coordIt = handler.node_coords.find(nid);
+                        if (coordIt == handler.node_coords.end()) continue; // skip unknown nodes
+
+                        double lat = coordIt->second.first;
+                        double lon = coordIt->second.second;
+
+                        // Project to Web Mercator for better visual layout
+                        const double deg2rad = M_PI / 180.0;
+                        double lon_rad = lon * deg2rad;
+                        double lat_rad = lat * deg2rad;
+
+                        // Web Mercator projection (x = lon, y = ln(tan(pi/4 + lat/2)))
+                        double x_merc = lon_rad;
+                        double y_merc = 0.5 * std::log((1.0 + std::sin(lat_rad)) / (1.0 - std::sin(lat_rad)));
+
+                        float z = 0.0f;
+
+                        // store mercator coords temporarily in vertices for later normalization
+                        unsigned int idx = static_cast<unsigned int>(out.vertices.size() / 3);
+                        out.vertices.push_back(static_cast<float>(x_merc));
+                        out.vertices.push_back(static_cast<float>(y_merc));
+                        out.vertices.push_back(z);
+
+                        node_index[nid] = idx;
+                    }
+                }
+
+                // Add indices for this segment as a contiguous run so we can draw GL_LINE_STRIP per segment
+                size_t startOffset = out.indices.size();
+                size_t added = 0;
+                for (size_t i = 0; i < seg.size(); ++i) {
+                    auto itIdx = node_index.find(seg[i]);
+                    if (itIdx == node_index.end()) continue;
+                    out.indices.push_back(itIdx->second);
+                    ++added;
+                }
+                if (added >= 2) {
+                    // compute approx segment extent to filter tiny segments
+                    float x0 = out.vertices[out.indices[startOffset] * 3 + 0];
+                    float y0 = out.vertices[out.indices[startOffset] * 3 + 1];
+                    float x1 = out.vertices[out.indices[startOffset + added - 1] * 3 + 0];
+                    float y1 = out.vertices[out.indices[startOffset + added - 1] * 3 + 1];
+                    float extent = std::hypot(x1 - x0, y1 - y0);
+                    const float MIN_SEG_EXTENT = 1e-6f; // filter threshold (in mercator units)
+                    if (extent >= MIN_SEG_EXTENT) {
+                        out.segmentOffsets.push_back(startOffset);
+                        out.segmentLengths.push_back(added);
+                    } else {
+                        out.indices.resize(startOffset);
+                    }
+                } else {
+                    // rollback if segment has fewer than 2 valid points
+                    out.indices.resize(startOffset);
+                }
+            }
+        }
+
+        std::cout << "Parsed map: vertices=" << (out.vertices.size()/3) << " indices=" << out.indices.size() << "\n";
+
+        // Normalize mercator coordinates to NDC [-1,1] while preserving aspect ratio
+        if (!out.vertices.empty()) {
+            // collect coordinates
+            std::vector<float> xs;
+            std::vector<float> ys;
+            xs.reserve(out.vertices.size() / 3);
+            ys.reserve(out.vertices.size() / 3);
+            for (size_t i = 0; i < out.vertices.size(); i += 3) {
+                xs.push_back(out.vertices[i]);
+                ys.push_back(out.vertices[i+1]);
+            }
+
+            // compute robust percentiles (5%-95%) to ignore outliers
+            auto percentile = [&](std::vector<float>& v, double p) {
+                if (v.empty()) return 0.0f;
+                size_t idx = static_cast<size_t>(std::floor(p * (v.size() - 1)));
+                std::vector<float> tmp = v;
+                std::nth_element(tmp.begin(), tmp.begin() + idx, tmp.end());
+                return tmp[idx];
+            };
+
+            float x_lo = percentile(xs, 0.05);
+            float x_hi = percentile(xs, 0.95);
+            float y_lo = percentile(ys, 0.05);
+            float y_hi = percentile(ys, 0.95);
+
+            float midX = (x_lo + x_hi) * 0.5f;
+            float midY = (y_lo + y_hi) * 0.5f;
+            float rangeX = x_hi - x_lo;
+            float rangeY = y_hi - y_lo;
+            float scale = std::max(rangeX, rangeY);
+            if (scale == 0.0f) scale = 1.0f;
+
+            // normalize to [-1,1]
+            for (size_t i = 0; i < out.vertices.size(); i += 3) {
+                float x = out.vertices[i];
+                float y = out.vertices[i+1];
+                float nx = (x - midX) * (2.0f / scale);
+                float ny = (y - midY) * (2.0f / scale);
+                out.vertices[i] = nx;
+                out.vertices[i+1] = ny;
+            }
+        }
+
+        
 
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << "\n";
     }
+
+    return out;
 }
