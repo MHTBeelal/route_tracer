@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.50)
+cmake_minimum_required(VERSION 3.22)
 project(route_tracer CXX C)
 
 # Set C++ standard

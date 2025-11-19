@@ -1,5 +1,6 @@
 // a_star.cpp (updated: respect oneway & drivable ways; nearest-node helper)
 
+#include "a_star.hpp"
 #include <iostream>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,8 +26,10 @@ struct Edge {
     double weight;
 };
 
-std::unordered_map<int64_t, Node> nodes;
-std::unordered_map<int64_t, std::vector<Edge>> adj;
+static std::unordered_map<int64_t, Node> nodes;
+static std::unordered_set<int64_t> valid_road_nodes;
+static std::unordered_map<int64_t, std::vector<Edge>> adj;
+static bool mapLoaded = false;
 
 constexpr double PI_CONST = 3.14159265358979323846;
 inline double deg2rad(double deg) { return deg * PI_CONST / 180.0; }
@@ -47,11 +50,26 @@ double haversine(double lat1, double lon1, double lat2, double lon2) {
 int64_t findNearestNode(double lat, double lon) {
     double bestDist = std::numeric_limits<double>::infinity();
     int64_t bestId = 0;
-    for (const auto &p : nodes) {
-        double d = haversine(lat, lon, p.second.lat, p.second.lon);
-        if (d < bestDist) {
-            bestDist = d;
-            bestId = p.first;
+    
+    // Only search nodes that are part of the road network
+    if (!valid_road_nodes.empty()) {
+        for (int64_t id : valid_road_nodes) {
+            if (!nodes.count(id)) continue;
+            const auto& node = nodes[id];
+            double d = haversine(lat, lon, node.lat, node.lon);
+            if (d < bestDist) {
+                bestDist = d;
+                bestId = id;
+            }
+        }
+    } else {
+        // Fallback if set is empty (shouldn't happen if map loaded)
+        for (const auto &p : nodes) {
+            double d = haversine(lat, lon, p.second.lat, p.second.lon);
+            if (d < bestDist) {
+                bestDist = d;
+                bestId = p.first;
+            }
         }
     }
     return bestId;
@@ -122,6 +140,10 @@ void loadKarachiMap(const std::string& filename) {
                 double d = haversine(nodes[id1].lat, nodes[id1].lon,
                                      nodes[id2].lat, nodes[id2].lon);
 
+                // Add nodes to valid set
+                valid_road_nodes.insert(id1);
+                valid_road_nodes.insert(id2);
+
                 if (oneway_reverse) {
                     // edge only from id2 -> id1
                     adj[id2].push_back({id1, d});
@@ -142,14 +164,13 @@ void loadKarachiMap(const std::string& filename) {
         MapHandler handler;
         osmium::apply(reader, handler);
         reader.close();
-        std::cout << "Map loaded successfully! Nodes: " << nodes.size()
-                  << "  Adjacencies (non-empty keys): " << adj.size() << "\n";
+        // Map loaded successfully
     } catch (const std::exception& e) {
         std::cerr << "Error reading Karachi map: " << e.what() << "\n";
     }
 }
 
-std::vector<int64_t> astar(int64_t start, int64_t goal) {
+static std::vector<int64_t> astar(int64_t start, int64_t goal) {
     std::unordered_map<int64_t, double> gScore;
     std::unordered_map<int64_t, double> fScore;
     std::unordered_map<int64_t, int64_t> parent;
@@ -188,7 +209,6 @@ std::vector<int64_t> astar(int64_t start, int64_t goal) {
             }
             path.push_back(start);
             std::reverse(path.begin(), path.end());
-            std::cout << "Path found! Nodes explored: " << nodes_explored << "\n";
             return path;
         }
 
@@ -209,107 +229,136 @@ std::vector<int64_t> astar(int64_t start, int64_t goal) {
         }
     }
 
-    std::cout << "No path found after exploring " << nodes_explored << " nodes.\n";
     return {};
 }
 
-void aStar() {
-    const std::string map_file = "res/data/karachi.osm.pbf";
-    loadKarachiMap(map_file);
+// Public API functions
 
-    std::cout << "Do you want to enter (1) node IDs or (2) coordinates? Enter 1 or 2: ";
-    int mode = 1;
-    std::cin >> mode;
-
-    int64_t start = 0, goal = 0;
-
-    if (mode == 1) {
-        std::cout << "Enter start node ID: ";
-        std::cin >> start;
-        std::cout << "Enter goal node ID: ";
-        std::cin >> goal;
-    } else {
-        double slat, slon, glat, glon;
-        std::cout << "Enter start latitude: ";
-        std::cin >> slat;
-        std::cout << "Enter start longitude: ";
-        std::cin >> slon;
-        std::cout << "Enter goal latitude: ";
-        std::cin >> glat;
-        std::cout << "Enter goal longitude: ";
-        std::cin >> glon;
-
-        start = findNearestNode(slat, slon);
-        goal  = findNearestNode(glat, glon);
-
-        std::cout << "Nearest start node: " << start
-                  << "  (lat: " << nodes[start].lat << " lon: " << nodes[start].lon << ")\n";
-        std::cout << "Nearest goal node: " << goal
-                  << "  (lat: " << nodes[goal].lat << " lon: " << nodes[goal].lon << ")\n";
+void initAStar(const std::string& mapFile) {
+    if (!mapLoaded) {
+        loadKarachiMap(mapFile);
+        mapLoaded = true;
     }
+}
+
+PathResult aStarWithNodes(int64_t startNode, int64_t endNode) {
+    PathResult result;
+    result.found = false;
+
+    if (!nodes.count(startNode) || !nodes.count(endNode)) {
+        std::cerr << "Invalid node IDs (not found in loaded OSM nodes).\n";
+        return result;
+    }
+
+    // Check if nodes have outgoing edges (are part of the road network)
+    if (!adj.count(startNode)) {
+        std::cerr << "Warning: Start node " << startNode << " exists but has no outgoing edges (not part of drivable road network).\n";
+    }
+    if (!adj.count(endNode)) {
+        std::cerr << "Warning: End node " << endNode << " exists but has no outgoing edges (not part of drivable road network).\n";
+    }
+
+    std::vector<int64_t> path = astar(startNode, endNode);
+    if (!path.empty()) {
+        result.nodeIds = path;
+        result.found = true;
+    } else {
+        // Provide helpful diagnostics
+        if (!adj.count(startNode) || !adj.count(endNode)) {
+            std::cerr << "Path not found: One or both nodes are not part of the drivable road network.\n";
+        } else {
+            std::cerr << "Path not found: No route exists between these nodes (they may be in disconnected parts of the road network).\n";
+        }
+    }
+
+    return result;
+}
+
+PathResult aStarWithCoords(double startLat, double startLon, double endLat, double endLon) {
+    PathResult result;
+    result.found = false;
+
+    int64_t start = findNearestNode(startLat, startLon);
+    int64_t goal = findNearestNode(endLat, endLon);
 
     if (!nodes.count(start) || !nodes.count(goal)) {
-        std::cerr << "Invalid node IDs (not found in loaded OSM nodes).\n";
-        return;
+        std::cerr << "Could not find valid nodes near given coordinates.\n";
+        return result;
     }
 
-    // Generate output file name
-    auto now = std::chrono::system_clock::now();
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream filename;
-    filename << "res/data/path_output_"
-             << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S") << ".txt";
-
-    std::ofstream outfile(filename.str());
-    if (!outfile) {
-        std::cerr << "Failed to create output file.\n";
-        return;
+    // Check if nearest nodes have outgoing edges (are part of the road network)
+    if (!adj.count(start)) {
+        std::cerr << "Warning: Nearest start node " << start << " exists but has no outgoing edges (not part of drivable road network).\n";
+        std::cerr << "  Try coordinates closer to a drivable road.\n";
+    }
+    if (!adj.count(goal)) {
+        std::cerr << "Warning: Nearest end node " << goal << " exists but has no outgoing edges (not part of drivable road network).\n";
+        std::cerr << "  Try coordinates closer to a drivable road.\n";
     }
 
-    double straight_distance = haversine(nodes[start].lat, nodes[start].lon,
-                                         nodes[goal].lat, nodes[goal].lon);
-    std::cout << "Straight-line distance: " << straight_distance / 1000.0 << " km\n";
-
-    std::cout << "Calculating shortest path...\n";
-    auto start_time = std::chrono::high_resolution_clock::now();
     std::vector<int64_t> path = astar(start, goal);
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    outfile << "Start Node ID: " << start << "\n";
-    outfile << "Goal Node ID: " << goal << "\n";
-    outfile << "Straight-line distance: " << straight_distance / 1000.0 << " km\n";
-    outfile << "Calculation time: " << duration.count() << " ms\n";
-    outfile << "------------------------------------\n";
-
-    if (path.empty()) {
-        outfile << "No path found between given nodes.\n";
-        std::cout << "No path found between given nodes.\n";
+    if (!path.empty()) {
+        result.nodeIds = path;
+        result.found = true;
     } else {
-        double total = 0;
-        outfile << "Shortest path:\n";
-        for (size_t i = 0; i < path.size(); ++i) {
-            outfile << path[i];
-            if (i + 1 < path.size()) {
-                double d = haversine(nodes[path[i]].lat, nodes[path[i]].lon,
-                                     nodes[path[i + 1]].lat, nodes[path[i + 1]].lon);
-                total += d;
-                outfile << " -> ";
-            }
-        }
-        outfile << "\nTotal distance: " << total / 1000.0 << " km\n";
-        outfile << "Path length: " << path.size() << " nodes\n";
-        outfile << "Efficiency ratio: " << (straight_distance > 0 ? (total / straight_distance) : 0.0) << " (ideal: ~1.0)\n";
-
-        std::cout << "Path saved successfully to: " << filename.str() << "\n";
-        std::cout << "Total distance: " << total / 1000.0 << " km\n";
-        std::cout << "Efficiency ratio: " << (straight_distance > 0 ? (total / straight_distance) : 0.0) << " (ideal: ~1.0)\n";
-
-        if (total / straight_distance > 1.3) {
-            std::cout << "WARNING: Path is significantly longer than straight-line distance!\n";
-            std::cout << "This may indicate missing direct road connections or a routing restriction in the OSM data.\n";
+        // Provide helpful diagnostics
+        if (!adj.count(start) || !adj.count(goal)) {
+            std::cerr << "Path not found: One or both nearest nodes are not part of the drivable road network.\n";
+            std::cerr << "  The nearest nodes to your coordinates may be on non-drivable paths (footways, etc.).\n";
+        } else {
+            std::cerr << "Path not found: No route exists between these nodes (they may be in disconnected parts of the road network).\n";
         }
     }
 
-    outfile.close();
+    return result;
+}
+
+bool getNodeCoords(int64_t nodeId, double& lat, double& lon) {
+    auto it = nodes.find(nodeId);
+    if (it != nodes.end()) {
+        lat = it->second.lat;
+        lon = it->second.lon;
+        return true;
+    }
+    return false;
+}
+
+void convertPathToVertices(const std::vector<int64_t>& pathNodeIds,
+                          float midX, float midY, float scale,
+                          std::vector<float>& outVertices,
+                          std::vector<unsigned int>& outIndices) {
+    outVertices.clear();
+    outIndices.clear();
+
+    if (pathNodeIds.empty() || nodes.empty()) {
+        return;
+    }
+
+    const double deg2rad = M_PI / 180.0;
+
+    // Convert each node in path to vertices
+    for (size_t i = 0; i < pathNodeIds.size(); ++i) {
+        double lat, lon;
+        if (!getNodeCoords(pathNodeIds[i], lat, lon)) {
+            continue; // Skip invalid nodes
+        }
+
+        // Convert to Web Mercator (same as map_data.cpp)
+        double lon_rad = lon * deg2rad;
+        double lat_rad = lat * deg2rad;
+        double x_merc = lon_rad;
+        double y_merc = 0.5 * std::log((1.0 + std::sin(lat_rad)) / (1.0 - std::sin(lat_rad)));
+
+        // Normalize to [-1, 1] (same as map_data.cpp)
+        float nx = (static_cast<float>(x_merc) - midX) * (2.0f / scale);
+        float ny = (static_cast<float>(y_merc) - midY) * (2.0f / scale);
+        float z = 0.0f;
+
+        outVertices.push_back(nx);
+        outVertices.push_back(ny);
+        outVertices.push_back(z);
+
+        // Add index for line strip
+        outIndices.push_back(static_cast<unsigned int>(i));
+    }
 }

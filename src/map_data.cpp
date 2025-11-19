@@ -43,17 +43,13 @@ public:
         const char* name = way.tags()["name"];
 
         static const std::unordered_set<std::string> major_roads = {
-            "motorway", "motorway_link",
-            "trunk", "trunk_link",
-            "primary", "primary_link",
-            "secondary", "secondary_link",
-            "tertiary", "tertiary_link",
+            "motorway", "trunk", "primary", "secondary", "tertiary",
+            "unclassified", "residential", "service", "living_street",
+            "motorway_link", "primary_link", "secondary_link", "tertiary_link"
         };
 
-        // ALLOW unnamed ways: include any way that has a highway tag in our whitelist
         if (highway && major_roads.count(highway)) {
-            std::string name_str = name ? std::string(name) : std::string();
-            std::pair<std::string, std::string> key(name_str, highway);
+            std::pair<std::string, std::string> key(name ? name : "unnamed", highway);
 
             std::vector<osmium::object_id_type> nodes;
             for (const auto& node_ref : way.nodes()) {
@@ -62,7 +58,7 @@ public:
 
             auto& road = mergedRoads[key];
             if (road.name.empty()) {
-                road.name = name_str;
+                road.name = name ? name : "unnamed";
                 road.type = highway;
             }
             road.segments.push_back(nodes);
@@ -284,6 +280,10 @@ Map parseMap(const std::string& filepath) {
             float rangeY = y_hi - y_lo;
             float scale = std::max(rangeX, rangeY);
             if (scale == 0.0f) scale = 1.0f;
+
+            out.midX = midX;
+            out.midY = midY;
+            out.scale = scale;
 
             // normalize to [-1,1]
             for (size_t i = 0; i < out.vertices.size(); i += 3) {
