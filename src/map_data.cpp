@@ -1,6 +1,6 @@
 #include "map_data.hpp"
 
-// Map_Data.cpp (modified to include node lat/lon output)
+// Map_Data.cpp (modified to include node lat/lon output and snapping)
 
 #include <iostream>
 #include <fstream>
@@ -19,6 +19,7 @@
 #include <limits>
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 
 struct Road {
     std::string name;
@@ -42,11 +43,17 @@ public:
         const char* name = way.tags()["name"];
 
         static const std::unordered_set<std::string> major_roads = {
-            "motorway", "trunk", "primary", "secondary", "tertiary"
+            "motorway", "motorway_link",
+            "trunk", "trunk_link",
+            "primary", "primary_link",
+            "secondary", "secondary_link",
+            "tertiary", "tertiary_link",
         };
 
-        if (highway && name && major_roads.count(highway)) {
-            std::pair<std::string, std::string> key(name, highway);
+        // ALLOW unnamed ways: include any way that has a highway tag in our whitelist
+        if (highway && major_roads.count(highway)) {
+            std::string name_str = name ? std::string(name) : std::string();
+            std::pair<std::string, std::string> key(name_str, highway);
 
             std::vector<osmium::object_id_type> nodes;
             for (const auto& node_ref : way.nodes()) {
@@ -55,7 +62,7 @@ public:
 
             auto& road = mergedRoads[key];
             if (road.name.empty()) {
-                road.name = name;
+                road.name = name_str;
                 road.type = highway;
             }
             road.segments.push_back(nodes);
@@ -157,6 +164,17 @@ Map parseMap(const std::string& filepath) {
         // Map node id -> vertex index
         std::unordered_map<osmium::object_id_type, unsigned int> node_index;
 
+        // --- snapping helper to merge vertices very close to each other ---
+        const double SNAP_EPS = 1e-7; // tune if needed
+        std::unordered_map<uint64_t, unsigned int> spatial_index;
+        auto make_key = [&](double x, double y) -> uint64_t {
+            int64_t xi = static_cast<int64_t>(std::llround(x / SNAP_EPS));
+            int64_t yi = static_cast<int64_t>(std::llround(y / SNAP_EPS));
+            uint64_t ux = static_cast<uint64_t>(xi) & 0xffffffffULL;
+            uint64_t uy = static_cast<uint64_t>(yi) & 0xffffffffULL;
+            return (ux << 32) | uy;
+        };
+
         // Build vertices and indices (line segments)
         for (const auto& entry : handler.mergedRoads) {
             const auto& road = entry.second;
@@ -184,11 +202,19 @@ Map parseMap(const std::string& filepath) {
 
                         float z = 0.0f;
 
-                        // store mercator coords temporarily in vertices for later normalization
-                        unsigned int idx = static_cast<unsigned int>(out.vertices.size() / 3);
-                        out.vertices.push_back(static_cast<float>(x_merc));
-                        out.vertices.push_back(static_cast<float>(y_merc));
-                        out.vertices.push_back(z);
+                        // Spatial snapping: merge coords that fall into same snap cell
+                        uint64_t skey = make_key(x_merc, y_merc);
+                        auto sit = spatial_index.find(skey);
+                        unsigned int idx;
+                        if (sit != spatial_index.end()) {
+                            idx = sit->second;
+                        } else {
+                            idx = static_cast<unsigned int>(out.vertices.size() / 3);
+                            out.vertices.push_back(static_cast<float>(x_merc));
+                            out.vertices.push_back(static_cast<float>(y_merc));
+                            out.vertices.push_back(z);
+                            spatial_index[skey] = idx;
+                        }
 
                         node_index[nid] = idx;
                     }
