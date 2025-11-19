@@ -2,70 +2,101 @@
 
 Renderer::Renderer() {
     readShader("res/shaders/basic.shader");
+    m_hasPath = false;
+    m_pathVAO = 0;
+    m_pathVBO = 0;
+    m_pathEBO = 0;
 }
+
 
 void Renderer::render() const
 {   
     glClear(GL_COLOR_BUFFER_BIT);
     glUseProgram(m_shaderProgram);
+    
+    //Render map
+    if (m_uColorLoc >= 0) glUniform3f(m_uColorLoc, 0.91f, 0.44f, 0.11f);
     glBindVertexArray(m_VAO);
-    // If segment info is available, draw each segment as a line strip for continuous roads
+    
     if (!m_segmentOffsets.empty() && m_segmentOffsets.size() == m_segmentLengths.size()) {
-        for (size_t i = 0; i < m_segmentOffsets.size(); ++i) {
+        for (size_t i = 0; i < m_segmentOffsets.size(); i++) {
             size_t offset = m_segmentOffsets[i];
             size_t len = m_segmentLengths[i];
             if (len < 2) continue;
-            glDrawElements(GL_LINE_STRIP, static_cast<GLsizei>(len), GL_UNSIGNED_INT, reinterpret_cast<const void*>(offset * sizeof(unsigned int)));
+
+            glDrawElements(m_drawMode, len, GL_UNSIGNED_INT, reinterpret_cast<const void*>(offset * sizeof(unsigned int)));
         }
     } else {
         glDrawElements(m_drawMode, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, 0);
+    }
+
+    // Render path
+    if (m_hasPath && !m_pathIndices.empty() && m_pathVAO != 0) {
+        
+        if (m_uOffsetLoc >= 0) glUniform2f(m_uOffsetLoc, m_camOffsetX, m_camOffsetY);
+        if (m_uScaleLoc >= 0) glUniform1f(m_uScaleLoc, m_camScale);
+        if (m_uAspectLoc >= 0) glUniform1f(m_uAspectLoc, static_cast<float>(m_viewportHeight) / static_cast<float>(m_viewportWidth));
+        if (m_uColorLoc >= 0) glUniform3f(m_uColorLoc, 0.0f, 1.0f, 1.0f);  // Cyan
+        
+        glBindVertexArray(m_pathVAO);
+        glLineWidth(3.0f);  
+        glDrawElements(GL_LINE_STRIP, static_cast<GLsizei>(m_pathIndices.size()), GL_UNSIGNED_INT, 0);
+        glLineWidth(1.5f);
+    }
+
+    // Render points
+    if (m_hasPoints && !m_pointVertices.empty() && m_pointVAO != 0) {
+        if (m_uOffsetLoc >= 0) glUniform2f(m_uOffsetLoc, m_camOffsetX, m_camOffsetY);
+        if (m_uScaleLoc >= 0) glUniform1f(m_uScaleLoc, m_camScale);
+        if (m_uAspectLoc >= 0) glUniform1f(m_uAspectLoc, static_cast<float>(m_viewportHeight) / static_cast<float>(m_viewportWidth));
+        if (m_uColorLoc >= 0) glUniform3f(m_uColorLoc, 1.0f, 0.0f, 0.0f);  // Red
+        
+        glBindVertexArray(m_pointVAO);
+        glPointSize(10.0f);
+        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(m_pointVertices.size() / 3));
+        glPointSize(1.0f);
     }
 }
 
 void Renderer::defineGeometry() 
 {
-    GLuint VBO;
-    glGenBuffers(1, &VBO);
+    glGenBuffers(1, &m_VBO);
 
     glGenVertexArrays(1, &m_VAO);
 
-    GLuint EBO;
-    glGenBuffers(1, &EBO);
+    glGenBuffers(1, &m_EBO);
 
     glBindVertexArray(m_VAO);
 
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
     glBufferData(GL_ARRAY_BUFFER, m_vertices.size() * sizeof(float), m_vertices.data(), GL_STATIC_DRAW);
     
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_indices.size() * sizeof(unsigned int), m_indices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
 
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, (void*)0);
     glEnableVertexAttribArray(0);
 
 
-    // Vertex shader
     GLuint vertexShader = createShader(GL_VERTEX_SHADER, m_vertexShaderSource);
 
-    //Fragment shader
     GLuint fragmentShader = createShader(GL_FRAGMENT_SHADER, m_fragmentShaderSource);
 
-    //Linking shaders into a program
-    GLuint shaderProgram = linkShadersIntoProgram({vertexShader, fragmentShader});
-    m_shaderProgram = shaderProgram;
+    m_shaderProgram = linkShadersIntoProgram({vertexShader, fragmentShader});
 
-    // default draw mode
-    m_drawMode = GL_TRIANGLES;
 
-    // get uniform locations for camera and set defaults
     m_uOffsetLoc = glGetUniformLocation(m_shaderProgram, "u_offset");
     m_uScaleLoc = glGetUniformLocation(m_shaderProgram, "u_scale");
+    m_uAspectLoc = glGetUniformLocation(m_shaderProgram, "u_aspect");
+    m_uColorLoc = glGetUniformLocation(m_shaderProgram, "u_color");
     if (m_uOffsetLoc >= 0) glUniform2f(m_uOffsetLoc, m_camOffsetX, m_camOffsetY);
     if (m_uScaleLoc >= 0) glUniform1f(m_uScaleLoc, m_camScale);
+    if (m_uAspectLoc >= 0) glUniform1f(m_uAspectLoc, static_cast<float>(m_viewportHeight) / static_cast<float>(m_viewportWidth));
 
-    // make lines more visible
+    if (m_uColorLoc >= 0) glUniform3f(m_uColorLoc, 0.91f, 0.44f, 0.11f);
+
     glLineWidth(1.5f);
 }
 
@@ -138,4 +169,100 @@ GLuint Renderer::linkShadersIntoProgram(const std::vector<GLuint>&& shaders) {
 
 
     return shaderProgram;
+}
+
+void Renderer::setCamera(float ox, float oy, float scale) {
+    m_camOffsetX = ox;
+    m_camOffsetY = oy;
+    m_camScale = scale;
+    if (m_shaderProgram) {
+        glUseProgram(m_shaderProgram);
+        if (m_uOffsetLoc >= 0) glUniform2f(m_uOffsetLoc, m_camOffsetX, m_camOffsetY);
+        if (m_uScaleLoc >= 0) glUniform1f(m_uScaleLoc, m_camScale);
+        if (m_uAspectLoc >= 0) glUniform1f(m_uAspectLoc, static_cast<float>(m_viewportHeight) / static_cast<float>(m_viewportWidth));
+    }
+}
+
+void Renderer::setViewportSize(int width, int height) {
+    m_viewportWidth = width;
+    m_viewportHeight = height;
+    if (m_shaderProgram && m_uAspectLoc >= 0) {
+        glUseProgram(m_shaderProgram);
+        glUniform1f(m_uAspectLoc, static_cast<float>(m_viewportHeight) / static_cast<float>(m_viewportWidth));
+    }
+}
+
+void Renderer::setPathVertices(const std::vector<float>& vertices) {
+    m_pathVertices = vertices;
+    m_hasPath = !vertices.empty();
+
+    if (m_pathVAO == 0) {
+        glGenVertexArrays(1, &m_pathVAO);
+        glGenBuffers(1, &m_pathVBO);
+        glGenBuffers(1, &m_pathEBO);
+    }
+
+    glBindVertexArray(m_pathVAO);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, m_pathVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_pathVertices.size() * sizeof(float), m_pathVertices.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, (void*)0);
+    glEnableVertexAttribArray(0);
+    
+    if (!m_pathIndices.empty()) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_pathEBO);
+    }
+    
+    glBindVertexArray(0);
+}
+
+void Renderer::setPathIndices(const std::vector<unsigned int>& indices) {
+    m_pathIndices = indices;
+
+    if (m_pathVAO == 0) {
+        glGenVertexArrays(1, &m_pathVAO);
+        glGenBuffers(1, &m_pathVBO);
+        glGenBuffers(1, &m_pathEBO);
+    }
+
+    glBindVertexArray(m_pathVAO);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, m_pathVBO);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, (void*)0);
+    glEnableVertexAttribArray(0);
+    
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_pathEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_pathIndices.size() * sizeof(unsigned int), m_pathIndices.data(), GL_DYNAMIC_DRAW);
+    
+    glBindVertexArray(0);
+}
+
+void Renderer::clearPath() {
+    m_hasPath = false;
+    m_pathVertices.clear();
+    m_pathIndices.clear();
+}
+
+void Renderer::setPoints(const std::vector<float>& vertices) {
+    m_pointVertices = vertices;
+    m_hasPoints = !vertices.empty();
+
+    if (m_pointVAO == 0) {
+        glGenVertexArrays(1, &m_pointVAO);
+        glGenBuffers(1, &m_pointVBO);
+    }
+
+    glBindVertexArray(m_pointVAO);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, m_pointVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_pointVertices.size() * sizeof(float), m_pointVertices.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, (void*)0);
+    glEnableVertexAttribArray(0);
+    
+    glBindVertexArray(0);
+}
+
+void Renderer::clearPoints() {
+    m_hasPoints = false;
+    m_pointVertices.clear();
 }

@@ -1,0 +1,55 @@
+name: CI - Build (Ubuntu LTS)
+
+on:
+  pull_request:
+    branches: main
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            git \
+            libglfw3-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libglu1-mesa-dev \
+            zlib1g-dev \
+            libbz2-dev \
+            liblz4-dev \
+            libexpat1-dev \
+
+      - name: Clone submodules
+        run: |
+          git submodule update --init --recursive
+
+      - name: Configure (CMake)
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -- -j$(nproc)
+
+      - name: Upload build artifacts (binary + resources)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: route_tracer_build
+          path: |
+            build/route_tracer
+            build/res

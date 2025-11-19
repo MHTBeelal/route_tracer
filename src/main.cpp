@@ -11,9 +11,10 @@
 
 int main(void)
 {  
-    // Parse map and provide geometry to renderer
-    // aStar();
+    // Initialize A* pathfinding with map data
+    initAStar("res/data/karachi.osm.pbf");
 
+    // Parse map and provide geometry to renderer
     Renderer renderer;
 
     Map map = parseMap("res/data/karachi.osm.pbf");
@@ -28,6 +29,7 @@ int main(void)
     }
 
     Windower windower(renderer, 800, 640);
+    windower.setMapBounds(map.midX, map.midY, map.scale);
     windower.run();
 
 }
