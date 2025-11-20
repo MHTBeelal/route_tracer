@@ -16,7 +16,8 @@ struct UIPanel {
     char m_searchBuffer[128] = "";
     bool m_searchRequested = false;
 
-    float m_pathColor[3] = {1.0f, 0.0f, 0.0f};
+    float m_distance = 0, m_straightLineDistance = 0;
+
 
     void ShowUIPanel();
 };

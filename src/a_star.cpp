@@ -46,6 +46,30 @@ double haversine(double lat1, double lon1, double lat2, double lon2) {
     return R * c;
 }
 
+double computePathLength(const std::vector<int64_t>& path) {
+    if (path.size() < 2) return 0.0;
+
+    double d = 0.0;
+    for (size_t i = 1; i < path.size(); i++) {
+        int64_t u = path[i - 1];
+        int64_t v = path[i];
+
+        bool found = false;
+        for (auto& e : adj[u]) {
+            if (e.to == v) {
+                d += e.weight; 
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            // Should not happen if A* returns valid edges.
+            std::cerr << "Warning: Missing edge " << u << " -> " << v << " while computing length.\n";
+        }
+    }
+    return d;
+}
+
 // Helper: find nearest node id for a lat/lon (linear search - slow for full map, but fine for testing)
 int64_t findNearestNode(double lat, double lon) {
     double bestDist = std::numeric_limits<double>::infinity();
@@ -244,74 +268,78 @@ void initAStar(const std::string& mapFile) {
 PathResult aStarWithNodes(int64_t startNode, int64_t endNode) {
     PathResult result;
     result.found = false;
+    result.distance = 0.0f;
+    result.straightPathDist = 0.0f;
 
     if (!nodes.count(startNode) || !nodes.count(endNode)) {
-        std::cerr << "Invalid node IDs (not found in loaded OSM nodes).\n";
+        std::cerr << "Invalid node IDs.\n";
         return result;
     }
 
-    // Check if nodes have outgoing edges (are part of the road network)
-    if (!adj.count(startNode)) {
-        std::cerr << "Warning: Start node " << startNode << " exists but has no outgoing edges (not part of drivable road network).\n";
-    }
-    if (!adj.count(endNode)) {
-        std::cerr << "Warning: End node " << endNode << " exists but has no outgoing edges (not part of drivable road network).\n";
-    }
+    // Straight-line distance
+    auto& A = nodes[startNode];
+    auto& B = nodes[endNode];
+    result.straightPathDist = haversine(A.lat, A.lon, B.lat, B.lon);
+
+    if (!adj.count(startNode))
+        std::cerr << "Warning: Start node " << startNode << " has no outgoing edges.\n";
+    if (!adj.count(endNode))
+        std::cerr << "Warning: End node " << endNode << " has no outgoing edges.\n";
 
     std::vector<int64_t> path = astar(startNode, endNode);
     if (!path.empty()) {
         result.nodeIds = path;
+        result.distance = computePathLength(path);
         result.found = true;
     } else {
-        // Provide helpful diagnostics
-        if (!adj.count(startNode) || !adj.count(endNode)) {
-            std::cerr << "Path not found: One or both nodes are not part of the drivable road network.\n";
-        } else {
-            std::cerr << "Path not found: No route exists between these nodes (they may be in disconnected parts of the road network).\n";
-        }
+        if (!adj.count(startNode) || !adj.count(endNode))
+            std::cerr << "Path not found: nodes not in drivable network.\n";
+        else
+            std::cerr << "Path not found: disconnected network.\n";
     }
 
     return result;
 }
 
-PathResult aStarWithCoords(double startLat, double startLon, double endLat, double endLon) {
+
+
+PathResult aStarWithCoords(double startLat, double startLon,
+                           double endLat,   double endLon) {
     PathResult result;
     result.found = false;
+    result.distance = 0.0f;
+    result.straightPathDist = haversine(startLat, startLon, endLat, endLon);
 
     int64_t start = findNearestNode(startLat, startLon);
-    int64_t goal = findNearestNode(endLat, endLon);
+    int64_t goal  = findNearestNode(endLat, endLon);
 
     if (!nodes.count(start) || !nodes.count(goal)) {
         std::cerr << "Could not find valid nodes near given coordinates.\n";
         return result;
     }
 
-    // Check if nearest nodes have outgoing edges (are part of the road network)
-    if (!adj.count(start)) {
-        std::cerr << "Warning: Nearest start node " << start << " exists but has no outgoing edges (not part of drivable road network).\n";
-        std::cerr << "  Try coordinates closer to a drivable road.\n";
-    }
-    if (!adj.count(goal)) {
-        std::cerr << "Warning: Nearest end node " << goal << " exists but has no outgoing edges (not part of drivable road network).\n";
-        std::cerr << "  Try coordinates closer to a drivable road.\n";
-    }
+    if (!adj.count(start))
+        std::cerr << "Warning: nearest start node " << start 
+                  << " has no outgoing edges.\n";
+    if (!adj.count(goal))
+        std::cerr << "Warning: nearest end node " << goal
+                  << " has no outgoing edges.\n";
 
     std::vector<int64_t> path = astar(start, goal);
     if (!path.empty()) {
         result.nodeIds = path;
+        result.distance = computePathLength(path);
         result.found = true;
     } else {
-        // Provide helpful diagnostics
-        if (!adj.count(start) || !adj.count(goal)) {
-            std::cerr << "Path not found: One or both nearest nodes are not part of the drivable road network.\n";
-            std::cerr << "  The nearest nodes to your coordinates may be on non-drivable paths (footways, etc.).\n";
-        } else {
-            std::cerr << "Path not found: No route exists between these nodes (they may be in disconnected parts of the road network).\n";
-        }
+        if (!adj.count(start) || !adj.count(goal))
+            std::cerr << "Path not found: non-drivable nearest nodes.\n";
+        else
+            std::cerr << "Path not found: disconnected roads.\n";
     }
 
     return result;
 }
+
 
 bool getNodeCoords(int64_t nodeId, double& lat, double& lon) {
     auto it = nodes.find(nodeId);

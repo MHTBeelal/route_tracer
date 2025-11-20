@@ -7,7 +7,8 @@
 
 // Path result structure
 struct PathResult {
-    std::vector<int64_t> nodeIds;  // Path as sequence of node IDs
+    std::vector<int64_t> nodeIds; 
+    float distance, straightPathDist; // Path as sequence of node IDs
     bool found;                     // Whether a path was found
 };
 
