@@ -42,6 +42,12 @@ void UIPanel::ShowUIPanel()
         ImGui::Spacing();
     }
 
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.0, 0.8, 0.05, 1.0), "Results: ");
+    ImGui::Spacing();
+
+    ImGui::Text("Distance: %.3f km", m_distance / 1000.0);
+    ImGui::Text("Straight Line Distance: %.3f km", m_straightLineDistance / 1000.0);
 
     
 

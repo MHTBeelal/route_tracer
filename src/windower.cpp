@@ -110,12 +110,16 @@ void Windower::run() {
         if (panel.m_runAStarWithNodes) {
             panel.m_runAStarWithNodes = false;
             
+            
             PathResult result = aStarWithNodes(panel.m_startNode, panel.m_endNode);
             if (result.found && !result.nodeIds.empty()) {
                 std::cout << "Path found with " << result.nodeIds.size() << " nodes\n";
                
                 std::vector<float> pathVertices;
                 std::vector<unsigned int> pathIndices;
+
+                panel.m_distance = result.distance;
+                panel.m_straightLineDistance = result.straightPathDist;
                 
                 convertPathToVertices(result.nodeIds, m_mapMidX, m_mapMidY, m_mapScale, pathVertices, pathIndices);
                 
